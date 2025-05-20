@@ -1,0 +1,235 @@
+# Google-Search-Analysis-for-Marketing-and-Research
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from textblob import TextBlob
+from prophet import Prophet
+from prophet.plot import plot_plotly
+import os
+import speech_recognition as sr
+from fpdf import FPDF
+import random
+import tempfile
+from PIL import Image
+import numpy as np
+import tensorflow as tf
+from datetime import datetime, timedelta
+
+# Load MobileNetV2 model
+model = tf.keras.applications.MobileNetV2(weights="imagenet")
+
+# Suppress warnings
+pd.options.mode.chained_assignment = None
+
+
+# Image recognition
+def recognize_object(image_path):
+    try:
+        image = Image.open(image_path).resize((224, 224)).convert("RGB")
+        image_array = tf.keras.preprocessing.image.img_to_array(image)
+        image_array = np.expand_dims(image_array, axis=0)
+        image_array = tf.keras.applications.mobilenet_v2.preprocess_input(image_array)
+        predictions = model.predict(image_array)
+        decoded = tf.keras.applications.mobilenet_v2.decode_predictions(predictions, top=1)
+        label = decoded[0][0][1]
+        confidence = decoded[0][0][2]
+        return f"{label} ({confidence*100:.2f}%)"
+    except Exception as e:
+        st.error(f"Error in image recognition: {e}")
+        return "Unknown"
+
+
+# Speech recognition
+def recognize_speech():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        st.write("🎙️ Listening...")
+        audio = recognizer.listen(source)
+        try:
+            text = recognizer.recognize_google(audio)
+            st.write(f"You said: **{text}**")
+            return text
+        except sr.UnknownValueError:
+            st.error("Couldn't understand the audio.")
+        except sr.RequestError:
+            st.error("Speech recognition service error.")
+        return None
+
+
+# Mock realistic search data
+def get_mock_search_data(keyword):
+    dates = pd.date_range(end=datetime.today(), periods=24, freq="M")
+    interest = [random.randint(40, 100) for _ in range(len(dates))]
+    interest_over_time_df = pd.DataFrame({"date": dates, keyword: interest}).set_index("date")
+
+    all_countries = [
+        "United States", "India", "United Kingdom", "Germany", "Canada",
+        "Australia", "France", "Japan", "Brazil", "South Korea",
+        "Italy", "Mexico", "Spain", "Netherlands", "Sweden"
+    ]
+    region_interest = [random.randint(30, 100) for _ in all_countries]
+    region_df = pd.DataFrame({keyword: region_interest}, index=all_countries)
+    region_df = region_df.sort_values(by=keyword, ascending=False)
+
+    modifiers = ["tools", "uses", "tutorial", "benefits", "applications", "future", "impact", "learning", "vs", "market"]
+    random.shuffle(modifiers)
+    related_queries = pd.DataFrame({
+        "query": [f"{keyword} {mod}" for mod in modifiers[:5]],
+        "value": [random.randint(40, 100) for _ in range(5)]
+    })
+
+    return interest_over_time_df, region_df, related_queries
+
+
+# Plot interest over time
+def plot_interest_over_time(data, keyword):
+    st.write(f"### Interest Over Time for **'{keyword}'**")
+    df = data.reset_index()
+    fig = px.line(df, x="date", y=keyword, title=f"Interest Over Time for '{keyword}'")
+    st.plotly_chart(fig)
+
+
+# Forecast using Prophet
+def forecast_trends(data, keyword):
+    st.write(f"### Forecast for Next 3 Months for **'{keyword}'**")
+    df = data.reset_index().rename(columns={"date": "ds", keyword: "y"})
+    model = Prophet()
+    model.fit(df)
+    future = model.make_future_dataframe(periods=90)
+    forecast = model.predict(future)
+
+    last_90_days = forecast.tail(90)[["ds", "yhat"]]
+
+    fig = px.line(last_90_days, x="ds", y="yhat", title="Predicted Trend (Next 3 Months)",
+                  labels={"ds": "Date", "yhat": "Predicted Interest"})
+    st.plotly_chart(fig)
+
+    avg_pred = last_90_days["yhat"].mean()
+    st.info(f"📌 **Summary:** The average predicted interest for the next 3 months is approximately **{avg_pred:.2f}**.")
+
+
+# Regional interest plot
+def plot_region_heatmap(data, keyword):
+    st.write(f"### Top Regions for **'{keyword}'**")
+    fig = px.bar(data.head(15), x=data[keyword], y=data.index,
+                 orientation='h', labels={keyword: "Interest", "index": "Country"}, title="Top 15 Countries")
+    st.plotly_chart(fig)
+
+
+# Sentiment analysis
+def analyze_sentiment(keyword):
+    st.write(f"### Sentiment Analysis for **'{keyword}'**")
+    phrases = [
+        f"I love {keyword}", f"{keyword} is amazing", f"{keyword} is useful",
+        f"I hate {keyword}", f"{keyword} is overrated", f"{keyword} is okay",
+        f"{keyword} changed my life", f"{keyword} is boring", f"{keyword} is essential"
+    ]
+    random.shuffle(phrases)
+
+    pos, neg, neu = 0, 0, 0
+    for p in phrases:
+        blob = TextBlob(p)
+        polarity = blob.sentiment.polarity
+        if polarity > 0:
+            pos += 1
+        elif polarity < 0:
+            neg += 1
+        else:
+            neu += 1
+        st.write(f"🗨️ {p} → Polarity: {polarity:.2f}")
+
+    total = pos + neg + neu
+    sentiments = ["Positive", "Negative", "Neutral"]
+    values = [pos / total * 100, neg / total * 100, neu / total * 100]
+    fig = px.bar(x=sentiments, y=values, labels={"x": "Sentiment", "y": "Percentage"})
+    st.plotly_chart(fig)
+
+    if pos > neg:
+        return "Positive"
+    elif neg > pos:
+        return "Negative"
+    else:
+        return "Neutral"
+
+
+# Related queries
+def plot_related_queries(df):
+    st.write("### Related Search Queries")
+    fig = px.bar(df, x="query", y="value", color="value", color_continuous_scale="blues")
+    st.plotly_chart(fig)
+
+
+# Report PDF
+def generate_report(keyword, time_data, region_data, sentiment_summary):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt=f"Google Search Report: {keyword}", ln=True, align="C")
+    pdf.cell(200, 10, txt="Interest Over Time", ln=True)
+    pdf.multi_cell(200, 10, txt=time_data.to_string())
+    pdf.cell(200, 10, txt="Top Regions", ln=True)
+    pdf.multi_cell(200, 10, txt=region_data.to_string())
+    pdf.cell(200, 10, txt="Sentiment Summary", ln=True)
+    pdf.multi_cell(200, 10, txt=sentiment_summary)
+    pdf.output("report.pdf")
+    with open("report.pdf", "rb") as f:
+        st.download_button("📄 Download Report", f.read(), file_name="report.pdf")
+
+
+# UI
+def main():
+    st.set_page_config(page_title="Google Search Analyzer", layout="centered")
+    st.title("🔎 Google Search Analysis for Marketing & Research")
+    st.markdown("Analyze trends, sentiment, and interest using keywords, voice, or images.")
+
+    col1, col2, col3 = st.columns([6, 1, 1])
+    with col1:
+        keyword = st.text_input("Enter a keyword:")
+    with col2:
+        if st.button("📷"):
+            uploaded_file = st.file_uploader("Upload image", type=["jpg", "jpeg", "png"], key="img")
+            if uploaded_file:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(uploaded_file.getvalue())
+                    image_path = tmp.name
+                keyword = recognize_object(image_path)
+                st.success(f"🔍 Recognized Object: `{keyword}`")
+    with col3:
+        if st.button("🎤"):
+            spoken = recognize_speech()
+            if spoken:
+                keyword = spoken
+
+    if not keyword:
+        st.info("Try searching for things like: Coffee ☕, iPhone 📱, Tesla 🚗, AI 🤖")
+        return
+
+    try:
+        time_data, region_data, related_queries = get_mock_search_data(keyword)
+
+        with st.expander("📈 Interest Over Time"):
+            plot_interest_over_time(time_data, keyword)
+
+        with st.expander("🌍 Regional Interest"):
+            plot_region_heatmap(region_data, keyword)
+
+        with st.expander("📅 Trend Forecast"):
+            forecast_trends(time_data, keyword)
+
+        with st.expander("💬 Sentiment Analysis"):
+            sentiment_summary = analyze_sentiment(keyword)
+
+        with st.expander("📌 Related Queries"):
+            plot_related_queries(related_queries)
+
+        if st.button("📄 Generate PDF Report"):
+            generate_report(keyword, time_data, region_data, f"Overall Sentiment: {sentiment_summary}")
+
+    except Exception as e:
+        st.error(f"❌ Something went wrong: {e}")
+
+
+if __name__ == "__main__":
+    main()
+
