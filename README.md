@@ -44,3 +44,6 @@ This project is designed to provide valuable insights into market dynamics, opti
 
 * Incorporate advanced **NLP** models like **BERT** for more accurate sentiment classification and keyword extraction.
 * Expand the platform to integrate **live search data** through APIs such as **PyTrends** or **Google BigQuery**.
+
+
+
